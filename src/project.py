@@ -4,7 +4,9 @@ import os
 import shutil
 import tempfile
 import zipfile
+import copy
 from datetime import date
+from pathlib import Path
 from typing import Any, Optional
 
 _literal_counter = [0]
@@ -29,6 +31,14 @@ _SHADOW_MAP = {
 }
 
 _VARIABLE_BLOCKS = {"data_setvariableto", "data_changevariableby", "data_variable", "data_showvariable", "data_hidevariable"}
+
+
+def _is_numeric_literal(value: str) -> bool:
+    try:
+        float(value)
+    except ValueError:
+        return False
+    return True
 
 
 class Project:
@@ -121,6 +131,10 @@ class Project:
                     parsed_inputs[ik] = [1, var_block_id]
                 elif iv.startswith("lit:"):
                     parsed_inputs[ik] = [1, [4, iv[4:]]]
+                elif iv.startswith("block:"):
+                    parsed_inputs[ik] = [1, iv[6:]]
+                elif _is_numeric_literal(iv):
+                    parsed_inputs[ik] = [1, [4, iv]]
                 else:
                     parsed_inputs[ik] = [1, iv]
             else:
@@ -204,9 +218,10 @@ class Project:
         for vid, vdata in target["variables"].items():
             if vdata[0] == name:
                 return vid
-        for vid, vdata in self.targets[0]["variables"].items():
-            if vdata[0] == name:
-                return vid
+        if self.targets:
+            for vid, vdata in self.targets[0]["variables"].items():
+                if vdata[0] == name:
+                    return vid
         raise ValueError(f"Variable '{name}' not found")
 
     def _write_svg(self, tmp, name, svg):
@@ -225,9 +240,10 @@ class Project:
         return hx, f"{hx}.svg"
 
     def export_sb3(self, output_dir: Optional[str] = None, filename: str = "project.sb3") -> str:
+        targets = copy.deepcopy(self.targets)
         tmp = tempfile.mkdtemp()
         try:
-            for t in self.targets:
+            for t in targets:
                 svg = t.pop("svg", None)
                 t.pop("id", None)
                 if svg:
@@ -242,7 +258,7 @@ class Project:
                         cost["rotationCenterY"] = 24
                     t["costumes"] = [cost]
 
-            for t in self.targets:
+            for t in targets:
                 blocks = t["blocks"]
                 # fix parents for next links
                 for bid, b in list(blocks.items()):
@@ -258,7 +274,7 @@ class Project:
                                 blocks[rid]["parent"] = bid
 
             monitors = []
-            for t in self.targets:
+            for t in targets:
                 for vid, vdata in t["variables"].items():
                     monitors.append({
                         "id": f"mon_{vid}", "mode": "default", "opcode": "data_variable",
@@ -270,7 +286,7 @@ class Project:
                     })
 
             project = {
-                "targets": self.targets,
+                "targets": targets,
                 "monitors": monitors,
                 "extensions": self.extensions,
                 "meta": {"semver": "3.0.0", "vm": "0.2.0", "agent": "scratch-mcp"}
@@ -281,9 +297,9 @@ class Project:
 
             if output_dir is None:
                 today = date.today()
-                output_dir = f"C:\\Visual Studio Code\\C++\\{today.year}.{today.month}.{today.day}"
+                output_dir = os.path.join(os.getcwd(), f"scratch-export-{today.year}.{today.month}.{today.day}")
             os.makedirs(output_dir, exist_ok=True)
-            outpath = os.path.join(output_dir, filename)
+            outpath = os.path.join(output_dir, Path(filename).name)
 
             with zipfile.ZipFile(outpath, "w", zipfile.ZIP_DEFLATED) as zf:
                 for fname in os.listdir(tmp):
